@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -74,11 +75,21 @@ func handleConn(c net.Conn) {
 	defer c.Close()
 	log.Println("New connection from", c.RemoteAddr())
 
-	var key ssh.PublicKey
-
 	sshConfig := ssh.ServerConfig{
+		BannerCallback: func(conn ssh.ConnMetadata) string {
+			return strings.TrimLeft(
+				`
+  ______            _    _       _     
+ |  ____|          | |  | |     | |    
+ | |__   _ ____   _| |__| |_   _| |__  
+ |  __| | '_ \ \ / /  __  | | | | '_ \ 
+ | |____| | | \ V /| |  | | |_| | |_) |
+ |______|_| |_|\_/ |_|  |_|\__,_|_.__/ 
+
+ `, "\n")
+
+		},
 		PublicKeyCallback: func(conn ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
-			key = k
 			log.Println("Public key for", conn.User()+":", string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(k))))
 			authed, err := authenticateGithub(conn.User(), k)
 			if err != nil {
@@ -87,7 +98,7 @@ func handleConn(c net.Conn) {
 			}
 			if !authed {
 				log.Println("GitHub authentication failed for", conn.User())
-				return nil, fmt.Errorf("authentication failed")
+				return nil, fmt.Errorf("authentication failed for %s at %v", conn.User(), conn.RemoteAddr())
 			}
 			log.Println("GitHub authentication succeeded for", conn.User())
 			return &ssh.Permissions{}, nil
@@ -97,8 +108,8 @@ func handleConn(c net.Conn) {
 	sshConfig.AddHostKey(privateKey)
 
 	conn, newChans, reqs, err := ssh.NewServerConn(c, &sshConfig)
-	if err != nil || key == nil {
-		log.Println(err)
+	if err != nil {
+		log.Println("failed to accept connection:", err)
 		return
 	}
 	_ = reqs
