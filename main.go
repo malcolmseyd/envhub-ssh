@@ -12,11 +12,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 var PORT = defaultEnv("PORT", "2222")
@@ -164,7 +165,6 @@ func authenticateGithub(username string, key ssh.PublicKey) (bool, error) {
 	return false, nil
 }
 
-// TODO business logic
 func handleChannel(conn *ssh.ServerConn, reqs <-chan *ssh.Request, channel ssh.Channel) error {
 	defer channel.Close()
 	defer channel.CloseWrite()
@@ -212,7 +212,7 @@ func handleCommand(conn *ssh.ServerConn, channel ssh.Channel, cmd string) error 
 	switch cmd {
 	case "":
 		// make sure it can write properly, they expect a TTY
-		term := terminal.NewTerminal(channel, "")
+		term := term.NewTerminal(channel, "")
 		io.WriteString(term, strings.TrimLeft(help, "\n"))
 	case "help":
 		io.WriteString(channel, strings.TrimLeft(help, "\n"))
@@ -270,17 +270,27 @@ func handleCommand(conn *ssh.ServerConn, channel ssh.Channel, cmd string) error 
 		io.WriteString(channel, fmt.Sprintf("\nsuccess! your id is %d\n", id))
 	case "ls":
 		rows, err := db.Query(`
-			SELECT id FROM envs
+			SELECT id, author, created_at FROM envs
 			WHERE author = ?
-			`, conn.User())
+			UNION
+			SELECT envs_id, author, envs.created_at FROM visibleTo
+			JOIN envs ON envs.id = envs_id
+			WHERE gh_username = ?
+			`, conn.User(), conn.User())
 		if err != nil {
 			return fmt.Errorf("error listing env files: %w", err)
 		}
+
+		w := tabwriter.NewWriter(channel, 0, 0, 2, ' ', 0)
+		io.WriteString(w, "ID\tAuthor\tCreated At\n")
 		for rows.Next() {
 			var id int64
-			rows.Scan(&id)
-			io.WriteString(channel, fmt.Sprintf("%d\n", id))
+			var author string
+			var createdAt time.Time
+			rows.Scan(&id, &author, &createdAt)
+			io.WriteString(w, fmt.Sprintf("%d\t%s\t%v\n", id, author, createdAt.Format(time.RFC3339)))
 		}
+		w.Flush()
 		rows.Close()
 	case "config":
 		if len(path) < 3 {
